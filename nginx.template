@@ -1,0 +1,383 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "NGINX Server with Google PageSpeed module",
+
+    "Parameters": {
+        "KeyName": {
+            "Description": "Name of an existing EC2 KeyPair to enable SSH access",
+            "Type": "String"
+        },
+        "InstanceType": {
+            "Type": "String",
+            "Default": "t1.micro",
+            "AllowedValues": [ "t1.micro", "m1.small", "m1.medium", "m1.large", "m1.xlarge", "m2.xlarge", "m2.2xlarge", "m2.4xlarge", "m3.xlarge", "m3.2xlarge", "c1.xlarge", "cc1.4xlarge" ],
+            "Description": "EC2 instance type (e.g. m1.small, m1.large, m1.xlarge, m2.xlarge)"
+        },
+        "SSHLocation": {
+            "Description": "The IP address range that can be used to SSH to the EC2 instances",
+            "Type": "String",
+            "MinLength": "9",
+            "MaxLength": "18",
+            "Default": "0.0.0.0/0",
+            "AllowedPattern": "(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/(\\d{1,2})",
+            "ConstraintDescription": "must be a valid IP CIDR range of the form x.x.x.x/x."
+        },
+        "NginxVersion": {
+            "Description": "Version of Nginx to use",
+            "Type": "String",
+            "Default": "1.4.2"
+        },
+        "PagespeedVersion": {
+            "Description": "Version of Pagespeed to use",
+            "Type": "String",
+            "Default": "1.6.29.5"
+        }
+    },
+    "Mappings": {
+        "InstanceTypeArch": {
+            "t1.micro":    { "Arch": "64" },
+            "m1.small":    { "Arch": "64" },
+            "m1.medium":   { "Arch": "64" },
+            "m1.large":    { "Arch": "64" },
+            "m1.xlarge":   { "Arch": "64" },
+            "m2.xlarge":   { "Arch": "64" },
+            "m2.2xlarge":  { "Arch": "64" },
+            "m2.4xlarge":  { "Arch": "64" },
+            "m3.xlarge":   { "Arch": "64" },
+            "m3.2xlarge":  { "Arch": "64" },
+            "cr1.8xlarge": { "Arch": "64" },
+            "hi1.4xlarge": { "Arch": "64" },
+            "hs1.8xlarge": { "Arch": "64" }
+        },
+        "RegionImageZone": {
+            "us-east-1":      { "64": "ami-05355a6c" },
+            "us-west-2":      { "64": "ami-0358ce33" },
+            "us-west-1":      { "64": "ami-3ffed17a" },
+            "eu-west-1":      { "64": "ami-c7c0d6b3" },
+            "ap-southeast-1": { "64": "ami-fade91a8" },
+            "ap-southeast-2": { "64": "ami-39b23d38" },
+            "ap-northeast-1": { "64": "ami-d16bfbeb" },
+            "sa-east-1":      { "64": "ami-5253894f" }
+        }
+    },
+    "Resources": {
+        "CfnUser": {
+            "Type": "AWS::IAM::User",
+            "Properties": {
+                "Path": "/",
+                "Policies": [
+                    {
+                        "PolicyName": "root",
+                        "PolicyDocument": { "Statement": [ { "Effect": "Allow", "Action": "cloudformation:DescribeStackResource", "Resource": "*" } ] }
+                    }
+                ]
+            }
+        },
+        "CfnUserKey": {
+            "Type": "AWS::IAM::AccessKey",
+            "Properties": {
+                "UserName": {
+                    "Ref": "CfnUser"
+                }
+            }
+        },
+        "NginxInstance": {
+            "Type": "AWS::EC2::Instance",
+            "Metadata": {
+                "AWS::CloudFormation::Init": {
+                    "config": {
+                        "packages": {
+                            "yum": {
+                                "gcc-c++"      : [],
+                                "pcre-devel"   : [],
+                                "zlib-devel"   : [],
+                                "make"         : [],
+                                "gd"           : [],
+                                "gd-devel"     : [],
+                                "openssl"      : [],
+                                "openssl-devel": []
+                            }
+                        },
+                        "groups": { },
+                        "users": {
+                            "www" : {
+                                "groups" : [ ],
+                                "uid" : "50",
+                                "homeDir" : "/tmp"
+                            }
+                        },
+                        "sources": {
+                            "/tmp/pagespeed" : { "Fn::Join": [ "", ["https://github.com/pagespeed/ngx_pagespeed/archive/release-", { "Ref" : "PagespeedVersion" }, "-beta.zip" ] ] },
+                            "/tmp/psol" : { "Fn::Join": [ "", ["https://dl.google.com/dl/page-speed/psol/", { "Ref" : "PagespeedVersion" }, ".tar.gz" ] ] },
+                            "/tmp/ngx_aws_auth": "https://github.com/anomalizer/ngx_aws_auth/archive/1.0.0.tar.gz",
+                            "/tmp/nginx" : { "Fn::Join": [ "", ["http://nginx.org/download/nginx-", { "Ref" : "NginxVersion" }, ".tar.gz" ] ] }
+                        },
+                        "files": {
+                            "/etc/cfn/cfn-hup.conf": {
+                                "content": { "Fn::Join": [ "", [
+                                            "[main]\n",
+                                            "stack=", { "Ref": "AWS::StackName" }, "\n",
+                                            "credential-file=/etc/cfn/cfn-credentials\n",
+                                            "interval=1\n",
+                                            "region=", { "Ref": "AWS::Region" }, "\n"
+                                        ] ] },
+                                "mode": "000400",
+                                "owner": "root",
+                                "group": "root"
+                            },
+                            "/etc/cfn/cfn-credentials": {
+                                "content": { "Fn::Join": [ "", [
+                                            "AWSAccessKeyId=", { "Ref": "CfnUserKey" }, "\n",
+                                            "AWSSecretKey=", { "Fn::GetAtt": [ "CfnUserKey", "SecretAccessKey" ] }, "\n"
+                                        ] ] },
+                                "mode": "000400",
+                                "owner": "root",
+                                "group": "root"
+                            },
+                            "/etc/cfn/hooks.d/cfn-auto-reloader.conf": {
+                                "content": { "Fn::Join": [ "", [
+                                            "[cfn-auto-reloader-hook]\n",
+                                            "triggers=post.update\n",
+                                            "path=Resources.NginxInstance.Metadata.AWS::CloudFormation::Init\n",
+                                            "action=/opt/aws/bin/cfn-init -s ", { "Ref": "AWS::StackId" }, " -r NginxInstance ", " --region ", { "Ref": "AWS::Region" }, "\n",
+                                            "runas=root\n"
+                                        ] ] }
+                            },
+                            "/etc/init.d/nginx": {
+                                "content": { "Fn::Join": [ "\n", [
+                                            "#!/bin/sh",
+                                            "#",
+                                            "# nginx - this script starts and stops the nginx daemon",
+                                            "#",
+                                            "# chkconfig:   - 85 15",
+                                            "# description:  Nginx is an HTTP(S) server, HTTP(S) reverse",
+                                            "#               proxy and IMAP/POP3 proxy server",
+                                            "#",
+                                            "# processname: nginx",
+                                            "# config:      /usr/local/nginx/conf/nginx.conf",
+                                            "# pidfile:     /usr/local/nginx/logs/nginx.pid",
+                                            "",
+                                            "# Source function library.",
+                                            ". /etc/rc.d/init.d/functions",
+                                            "",
+                                            "# Source networking configuration.",
+                                            ". /etc/sysconfig/network",
+                                            "",
+                                            "# Check that networking is up.",
+                                            "[ \"$NETWORKING\" = \"no\" ] && exit 0",
+                                            "",
+                                            "nginx=\"/usr/local/nginx/sbin/nginx\"",
+                                            "prog=$(basename $nginx)",
+                                            "",
+                                            "NGINX_CONF_FILE=\"/usr/local/nginx/conf/nginx.conf\"",
+                                            "",
+                                            "lockfile=/var/lock/subsys/nginx",
+                                            "",
+                                            "start() {",
+                                            "    [ -x $nginx ] || exit 5",
+                                            "    [ -f $NGINX_CONF_FILE ] || exit 6",
+                                            "    echo -n $\"Starting $prog: \"",
+                                            "    daemon $nginx -c $NGINX_CONF_FILE",
+                                            "    retval=$?",
+                                            "    echo",
+                                            "    [ $retval -eq 0 ] && touch $lockfile",
+                                            "    return $retval",
+                                            "}",
+                                            "",
+                                            "stop() {",
+                                            "    echo -n $\"Stopping $prog: \"",
+                                            "    killproc $prog -QUIT",
+                                            "    retval=$?",
+                                            "    echo",
+                                            "    [ $retval -eq 0 ] && rm -f $lockfile",
+                                            "    return $retval",
+                                            "}",
+                                            "",
+                                            "restart() {",
+                                            "    configtest || return $?",
+                                            "    stop",
+                                            "    start",
+                                            "}",
+                                            "",
+                                            "reload() {",
+                                            "    configtest || return $?",
+                                            "    echo -n $\"Reloading $prog: \"",
+                                            "    killproc $nginx -HUP",
+                                            "    RETVAL=$?",
+                                            "    echo",
+                                            "}",
+                                            "",
+                                            "force_reload() {",
+                                            "    restart",
+                                            "}",
+                                            "",
+                                            "configtest() {",
+                                            "  $nginx -t -c $NGINX_CONF_FILE",
+                                            "}",
+                                            "",
+                                            "rh_status() {",
+                                            "    status $prog",
+                                            "}",
+                                            "",
+                                            "rh_status_q() {",
+                                            "    rh_status >/dev/null 2>&1",
+                                            "}",
+                                            "",
+                                            "case \"$1\" in",
+                                            "    start)",
+                                            "        rh_status_q && exit 0",
+                                            "        $1",
+                                            "        ;;",
+                                            "    stop)",
+                                            "        rh_status_q || exit 0",
+                                            "        $1",
+                                            "        ;;",
+                                            "    restart|configtest)",
+                                            "        $1",
+                                            "        ;;",
+                                            "    reload)",
+                                            "        rh_status_q || exit 7",
+                                            "        $1",
+                                            "        ;;",
+                                            "    force-reload)",
+                                            "        force_reload",
+                                            "        ;;",
+                                            "    status)",
+                                            "        rh_status",
+                                            "        ;;",
+                                            "    condrestart|try-restart)",
+                                            "        rh_status_q || exit 0",
+                                            "            ;;",
+                                            "    *)",
+                                            "        echo $\"Usage: $0 {start|stop|status|restart|condrestart|try-restart|reload|force-reload|configtest}\"",
+                                            "        exit 2",
+                                            "esac"
+                                        ] ] },
+                                "mode": "000755",
+                                "owner": "root",
+                                "group": "root"
+                            }
+                        },
+                        "commands": {
+                            "a-prepare" : {
+                                "command" : { "Fn::Join": [ "", ["mv psol/psol pagespeed/ngx_pagespeed-release-", { "Ref" : "PagespeedVersion" }, "-beta" ] ] },
+                                "cwd" : "/tmp"
+                            },
+                            "b-configure" : {
+                                "command" : { "Fn::Join": [ "", ["./configure",
+                                        " --add-module=/tmp/pagespeed/ngx_pagespeed-release-", { "Ref" : "PagespeedVersion" }, "-beta",
+                                        " --add-module=/tmp/ngx_aws_auth/ngx_aws_auth-1.0.0",
+                                        " --with-http_image_filter_module",
+                                        " --without-http_auth_basic_module",
+                                        " --without-http_autoindex_module",
+                                        " --without-http_fastcgi_module",
+                                        " --without-http_geo_module",
+                                        " --without-http_scgi_module",
+                                        " --without-http_userid_module",
+                                        " --without-http_uwsgi_module",
+                                        " --without-http_ssi_module",
+                                        " --with-http_ssl_module",
+                                        " --with-http_spdy_module",
+                                        " > /tmp/nginx-configure.log 2>&1"
+                                    ] ]
+                                },
+                                "cwd" : { "Fn::Join": [ "", ["/tmp/nginx/nginx-", { "Ref" : "NginxVersion" } ] ] }
+                            },
+                            "c-make" : {
+                                "command" : "make",
+                                "cwd" : { "Fn::Join": [ "", ["/tmp/nginx/nginx-", { "Ref" : "NginxVersion" } ] ] }
+                            },
+                            "d-install" : {
+                                "command" : "make install",
+                                "cwd" : { "Fn::Join": [ "", ["/tmp/nginx/nginx-", { "Ref" : "NginxVersion" } ] ] }
+                            }
+                        },
+                        "services": {
+                            "sysvinit" : {
+                                "nginx" : {
+                                    "enabled" : "true",
+                                    "ensureRunning" : "true",
+                                    "files" : ["/usr/local/nginx/conf/nginx.conf"],
+                                    "sources" : ["/var/www/html"]
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "Properties": {
+                "InstanceType": { "Ref": "InstanceType" },
+                "ImageId": { "Fn::FindInMap": [ "RegionImageZone", { "Ref": "AWS::Region" }, { "Fn::FindInMap": [ "InstanceTypeArch", { "Ref": "InstanceType" }, "Arch" ] } ] },
+                "SecurityGroups": [ { "Ref": "WebServerSecurityGroup" } ],
+                "DisableApiTermination": "false",
+                "KeyName": { "Ref": "KeyName" },
+                "UserData": { "Fn::Base64": { "Fn::Join": [ "", [
+                              "#!/bin/bash -v\n",
+
+                              "yum update -y aws-cfn-bootstrap\n",
+
+                              "function error_exit\n",
+                              "{\n",
+                              "  /opt/aws/bin/cfn-signal -e 1 -r \"$1\" '", { "Ref": "WaitHandle" }, "'\n",
+                              "  exit 1\n",
+                              "}\n",
+
+                              "# Upgrade to latest and greatest ...\n",
+                              "yum upgrade -y\n",
+
+                              "# Raise file descriptor limits\n",
+                              "echo '* hard nofile 100000' | tee -a /etc/security/limits.conf\n",
+                              "echo '* soft nofile 100000' | tee -a /etc/security/limits.conf\n",
+                              "ulimit -n 64000\n",
+                              "ulimit -u 32000\n",
+
+                              "/opt/aws/bin/cfn-init -s ", { "Ref": "AWS::StackId" }, " -r NginxInstance ", " --region ", { "Ref": "AWS::Region" }, " || error_exit 'Failed to run cfn-init'\n",
+
+                              "/opt/aws/bin/cfn-hup || error_exit 'Failed to start cfn-hup'\n",
+
+                              "/opt/aws/bin/cfn-signal -e 0 -r \"Stack setup complete\" '", { "Ref": "WaitHandle" }, "'\n"
+                          ] ] }
+                }
+            }
+        },
+        "WaitHandle": {
+            "Type": "AWS::CloudFormation::WaitConditionHandle"
+        },
+        "WaitCondition": {
+            "Type": "AWS::CloudFormation::WaitCondition",
+            "DependsOn": "NginxInstance",
+            "Properties": {
+                "Handle": { "Ref": "WaitHandle" },
+                "Timeout": "300"
+            }
+        },
+        "WebServerSecurityGroup": {
+            "Type": "AWS::EC2::SecurityGroup",
+            "Properties": {
+                "GroupDescription": "Enable HTTP access via port 80 and SSH access",
+                "SecurityGroupIngress": [
+                    { "IpProtocol": "tcp", "FromPort": "80", "ToPort": "80", "CidrIp": "0.0.0.0/0" },
+                    { "IpProtocol": "tcp", "FromPort": "22", "ToPort": "22", "CidrIp": { "Ref": "SSHLocation" } }
+                ]
+            }
+        },
+        "EIP": {
+            "Type": "AWS::EC2::EIP",
+            "Properties": {
+                "InstanceId": { "Ref": "NginxInstance" }
+            }
+        }
+    },
+    "Outputs": {
+        "InstanceId": {
+            "Description": "InstanceId of the newly created EC2 instance",
+            "Value": {
+                "Ref": "NginxInstance"
+            }
+        },
+        "URL": {
+            "Description": "URL of the server",
+            "Value": { "Fn::Join": [ "", [ "http://", { "Ref": "EIP" } ] ] }
+        }
+    }
+}
